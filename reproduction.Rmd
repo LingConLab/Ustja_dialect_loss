@@ -1,0 +1,267 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "tables")
+require("tidyverse")
+require("lme4")
+```
+
+## Initialization
+
+```{r}
+dir_results <- '../results'
+
+bootstrap_iterations <- 1000
+do_bootstrap <- FALSE
+yearmin <- 1800
+yearmax <- 2000
+
+variables <- c('var1_adj', 'var2_ae', 'var3_sh', 'var4_n', 
+               'var5_sja_ek', 'var6_sja_v', 
+               'var7_ot', 'var8_tu', 'var10_one', 'var11_ei', 'var12_kto')
+```
+
+We consider only speakers mentioned in `speakers_needed.csv`.
+
+WHY?
+
+```{r}
+speakers_table <- read.csv('speakers_needed.csv')
+speakers <- speakers_table$speaker
+```
+
+
+```{r}
+read_table <- function(var) {
+  filename <- paste(var,'csv', sep='.')
+  table <- read.csv(filename)
+  table <- table[table$speaker %in% speakers, ]
+  table <- table[table$total > 0, ]
+  table$prop <- table$cons/table$total
+  table$age <- 2017 - table$year
+  table$year20 <- table$year - 1920
+  table
+}
+```
+Function `read_table` reads data that corresponds to a particular variable and make some pre-precessing. For numerical stability, we use year 1920 as a new origin.
+
+
+```{r}
+unaggregate <- function(table) {
+  cons <- as.vector(table$cons)
+  inn <- as.vector(table$inn)
+  data <- data.frame(speaker=rep(table$speaker, 2), 
+                     year = rep(table$year, 2), 
+                     gender = rep(table$gender, 2), 
+                     cons = rep(c(1, 0), each=nrow(table)), 
+                     value = c(cons, inn))
+  # make two replicas of the table
+  # for the first replica, variable cons is set to 1
+  # and in value column the number in table$cons is given
+  # for the second replica, variable cons is set to 0
+  # and in value column the number table$inn is given
+  
+  data <- data[rep(seq_len(nrow(data)), data$value), 1:4]
+  # rep(seq_len(3), c(2, 4, 1)) --> 1 1 2 2 2 2 3
+  # we duplicate each row of data the number of times given in $value
+  
+  data$age <- 2017 - data$year
+  data$year20 <- data$year - 1920
+  data
+}
+```
+This function *unaggregates* data, i.e. in new table the row is one realization of a variable, either conservative or innovative.
+
+```{r}
+reg <- function(data) {
+  glmer(cons ~ year20 + (1|speaker), data = data, family='binomial')
+}
+```
+This is our regression model.
+
+```{r}
+bag <- function(table) {
+  indicies = sample(1:nrow(table), replace = T, size=nrow(table))
+  table[indicies,]
+}
+```
+This function performs baggin procedure used in boostrap estimate of confidence intervals.
+
+```{r}
+confband <- function(model) {
+  vcov.m <- vcov(model)
+  
+  confband <- data.frame(year=seq(yearmin, yearmax, length.out = 10000))
+  confband$year20 <- confband$year - 1920
+  
+  mm <- model.matrix(~ year20, confband)
+  vars <- mm %*% vcov.m %*% t(mm)
+  sds <- sqrt(diag(vars))
+  z.val <- qnorm(1 - (1 - 0.95)/2)
+  
+  confband$pred_ <- predict(model, confband, type="link", re.form = NA)
+  confband$lower_ <- confband$pred_ - z.val * sds
+  confband$upper_ <- confband$pred_ + z.val * sds
+  confband$pred <- plogis(confband$pred_)
+  confband$lower <- plogis(confband$lower_)
+  confband$upper <- plogis(confband$upper_)
+  confband
+}
+```
+This function finds confidence band around prediction curve.
+
+```{r}
+midpoint_confint <- function(band) {
+  c(lower=band[min(which(band$lower_<0)), "year"],
+       upper=band[min(which(band$upper_<0)),"year"],
+       estimate=band[min(which(band$pred_<0)),"year"])
+}
+```
+This functions finds *turning point* (i.e. point of intersection of prediction curve with level probability=0.5) and its confidence interval.
+
+```{r}
+coeff_confint <- function(model, coeff) {
+  coeff_data <- summary(model)$coeff[coeff,]
+  est <- unname(coeff_data['Estimate'])
+  conf <- confint(model, parm=coeff, method='Wald')
+  return(c(estimate = est,
+           lower = conf[,'2.5 %'],
+           upper = conf[,'97.5 %']))
+}
+```
+This function extracts confidence interval from the model for given coefficient.
+
+## Main loop
+Now we are ready to fit all models and calculate corresponding estimates and confidence intervals
+
+```{r}
+midpoints <- list()
+p0s <- list()
+slopes <- list()
+
+for (var in variables) {
+  
+  table <- read_table(var)
+  data <- unaggregate((table))
+  
+  fit_re <- reg(data)
+  summary(fit_re)
+  band <- confband(fit_re)
+  if(do_bootstrap) {
+    bootstrap_predicts <- vector("list", bootstrap_iterations)
+    
+    for (i in 1:bootstrap_iterations) {
+      bs_data <- unaggregate(bag(table))
+      bootstrap_predicts[[i]] <- confband(reg(bs_data), bs_data)$pred
+      print(i)
+    }
+    bs_confint <- t(sapply(transpose(bootstrap_predicts), 
+                           function(x){quantile(x, probs=c(0.05/2, 1-0.05/2), 
+                                                na.rm=TRUE,
+                                                type=8)}))
+    colnames(bs_confint) <- c("bs_lower", "bs_upper")
+    band <- cbind(band, bs_confint)
+  }
+
+  if (F) {
+    fig <- ggplot() +
+      geom_point(data=table, aes(x=year, y=prop, size=total), shape=21, fill='grey', color='black', alpha=0.6) +
+      geom_line(size=1, alpha=0.8, aes(year, pred), data=band) +
+      geom_ribbon(aes(ymin=lower, ymax=upper, x=year), alpha=0.3, data=band, 
+                  color='steelblue2', fill='steelblue2') +
+      theme_bw() +
+      theme(plot.title = element_text(lineheight=1, size=12, family="serif",
+                                      margin=margin(0,0,10,0)), 
+            axis.text=element_text(size=10, family="serif"), 
+            axis.title=element_text(size=12, family="serif"),
+            axis.title.y=element_text(margin=margin(0,10,0,0)), 
+            axis.title.x=element_text(margin=margin(10,0,0,0)), 
+            legend.text=element_text(size=10, family="serif"),
+            legend.title=element_text(size=12, family="serif"),
+            plot.margin=unit(c(0.4,0.15,0.15,0.15), 'cm')) +
+      scale_x_continuous('year of birth', breaks=seq(yearmin, yearmax, 10)) +
+      scale_y_continuous('probability', breaks=seq(0,1,0.1), limits=c(0, 1)) +
+      scale_size_continuous(range=c(1,8)) +
+      guides(size = guide_legend(title = 'number of\nobservations'))
+      if(do_bootstrap) {
+        fig <- fig + geom_ribbon(aes(ymin=bs_lower, ymax=bs_upper, x=year), alpha=0.3, data=band, 
+                    color='orange1', fill='orange1')
+      }
+  }
+  v <- toupper(str_extract(var, '(?<=_)(.+)'))
+  midpoints[[v]] <- midpoint_confint(band)
+  p0s[[v]] <- plogis(coeff_confint(fit_re, '(Intercept)'))
+  slopes[[v]] <- coeff_confint(fit_re, 'year20')
+  
+#  ggsave(paste(dir_results, paste(var, "png", sep="."), sep='/'), fig, height=4, width = 7)
+}
+```
+
+## Plotting
+
+```{r}
+draw_crossbars <- function(data, scale_y) {
+  p0 <- as.data.frame(t(as.data.frame(data))) %>% rownames_to_column(var='variable') %>% arrange(estimate)
+  f1 <- ggplot(p0) +
+    geom_crossbar(aes(x=reorder(variable, estimate), 
+                      y=estimate, ymin = lower, ymax = upper), 
+                  size=0.4, width=0.4) +
+    theme_bw() +
+    theme(plot.title = element_text(lineheight=1, size=12, family="Liberation Serif",
+                                    margin=margin(0,0,10,0)), 
+          axis.text=element_text(size=10, family="Liberation Serif"), #размер текста
+          axis.title=element_text(size=12, family="Liberation Serif"),
+          axis.title.y=element_blank(), #space between axis and title!
+          axis.title.x=element_blank(), #space between axis and title!
+          legend.text=element_text(size=10, family="Liberation Serif"),
+          legend.title=element_text(size=12, family="Liberation Serif"),
+          plot.margin=unit(c(0.4,0.15,0.15,0.15), 'cm')) +
+    scale_y +
+    scale_x_discrete('variable') 
+  f1
+}
+```
+### Figure 4
+```{r}
+draw_crossbars(p0s, scale_y_continuous('probability', breaks=seq(0, 1, 0.1)))
+```
+
+### Figure 5
+```{r}
+draw_crossbars(slopes, scale_y_continuous())
+```
+### Figure 6
+```{r}
+draw_crossbars(midpoints, scale_y_continuous())
+```
+
+### Figure 1
+```{r}
+table4_n <- read_table("var4_n")
+f4_n_dotplot <- ggplot(table4_n, aes(year, prop)) +
+  geom_point(data= table4_n, aes(x=year, y=prop, size=total), 
+              shape=21, fill='grey', color='black', alpha=0.6) +
+  #geom_line(size=1, alpha=0.8) +
+  #geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.3) +
+  theme_bw() +
+  #ggtitle('The absence of initial n- in the third person pronouns after a preposition') +
+  #ggtitle('Values of probability predicted by a logistic regression model with one predictor (age)\n n in pronouns') +
+  theme(plot.title = element_text(lineheight=1, size=12, family="Liberation Serif",
+                                  margin=margin(0,0,10,0)), 
+        axis.text=element_text(size=10, family="Liberation Serif"), #размер текста
+        axis.title=element_text(size=12, family="Liberation Serif"),
+        axis.title.y=element_text(margin=margin(0,10,0,0)), #space between axis and title!
+        axis.title.x=element_text(margin=margin(10,0,0,0)), #space between axis and title!
+        legend.text=element_text(size=10, family="Liberation Serif"),
+        legend.title=element_text(size=12, family="Liberation Serif"),
+        plot.margin=unit(c(0.4,0.15,0.15,0.15), 'cm')) +
+  scale_x_continuous('year of birth', breaks=seq(1920, 2000, 10)) +
+  scale_y_continuous('proportion of dialectal realizations', breaks=seq(0,1,0.1), limits=c(0, 1)) +
+  guides(size = guide_legend(title = 'number of\nobservations'))
+f4_n_dotplot
+```

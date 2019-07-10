@@ -3,6 +3,7 @@ title: "R Notebook"
 output:
   html_document:
     df_print: paged
+  pdf_document: default
 ---
 ```{r setup, include=FALSE, echo=FALSE}
 require("knitr")
@@ -21,9 +22,12 @@ do_bootstrap <- FALSE
 yearmin <- 1800
 yearmax <- 2000
 
-variables <- c('var1_adj', 'var2_ae', 'var3_sh', 'var4_n', 
+filenames <- c('var1_adj', 'var2_ae', 'var3_sh', 'var4_n', 
                'var5_sja_ek', 'var6_sja_v', 
                'var7_ot', 'var8_tu', 'var10_one', 'var11_ei', 'var12_kto')
+
+variables <- c('ADJ', 'A~E', 'SH', 'PREP', 'REFL1', 'REFL2', 'OT', 'TU', 'NOM', 'E~I', 'DISS')
+variables <- setNames(variables, filenames)
 ```
 
 We consider only speakers mentioned in `speakers_needed.csv`.
@@ -48,7 +52,7 @@ read_table <- function(var) {
   table
 }
 ```
-Function `read_table` reads data that corresponds to a particular variable and make some pre-precessing. For numerical stability, we use year 1920 as a new origin.
+Function `read_table` reads data that corresponds to a particular variable and make some pre-processing. For numerical stability, we use year 1920 as a new origin.
 
 
 ```{r}
@@ -78,8 +82,16 @@ unaggregate <- function(table) {
 This function *unaggregates* data, i.e. in new table the row is one realization of a variable, either conservative or innovative.
 
 ```{r}
-reg <- function(data) {
-  glmer(cons ~ year20 + (1|speaker), data = data, family='binomial')
+reg <- function(data, bobyqa) {
+  if (bobyqa) {
+    return(glmer(cons ~ year20 + (1|speaker), data = data, family='binomial',
+        control = glmerControl(optimizer = "bobyqa")))
+  }
+  else
+  {
+    return(glmer(cons ~ year20 + (1|speaker), data = data, family='binomial'))
+  }
+  
 }
 ```
 This is our regression model.
@@ -128,7 +140,7 @@ This functions finds *turning point* (i.e. point of intersection of prediction c
 coeff_confint <- function(model, coeff) {
   coeff_data <- summary(model)$coeff[coeff,]
   est <- unname(coeff_data['Estimate'])
-  conf <- confint(model, parm=coeff, method='Wald')
+  conf <- confint.merMod(model, parm=coeff, devtol=1e-6)
   return(c(estimate = est,
            lower = conf[,'2.5 %'],
            upper = conf[,'97.5 %']))
@@ -144,12 +156,15 @@ midpoints <- list()
 p0s <- list()
 slopes <- list()
 
-for (var in variables) {
-  
-  table <- read_table(var)
+for (fn in filenames) {
+  print(paste("Processing", fn))
+  table <- read_table(fn)
   data <- unaggregate((table))
   
-  fit_re <- reg(data)
+  fit_re <- reg(data, bobyqa=(fn == 'var11_ei'))
+  # we use BOBYQA optimizer for variable var11_ei in order
+  # to achieve convergence for confidence intervals
+  
   summary(fit_re)
   band <- confband(fit_re)
   if(do_bootstrap) {
@@ -193,7 +208,7 @@ for (var in variables) {
                     color='orange1', fill='orange1')
       }
   }
-  v <- toupper(str_extract(var, '(?<=_)(.+)'))
+  v <- variables[fn]
   midpoints[[v]] <- midpoint_confint(band)
   p0s[[v]] <- plogis(coeff_confint(fit_re, '(Intercept)'))
   slopes[[v]] <- coeff_confint(fit_re, 'year20')
@@ -205,8 +220,8 @@ for (var in variables) {
 ## Plotting
 
 ```{r}
-draw_crossbars <- function(data, scale_y) {
-  p0 <- as.data.frame(t(as.data.frame(data))) %>% rownames_to_column(var='variable') %>% arrange(estimate)
+draw_crossbars <- function(data) {
+  p0 <- as.data.frame(t(as.data.frame(data))) %>% mutate(variable=variables) %>% arrange(estimate)
   f1 <- ggplot(p0) +
     geom_crossbar(aes(x=reorder(variable, estimate), 
                       y=estimate, ymin = lower, ymax = upper), 
@@ -220,24 +235,26 @@ draw_crossbars <- function(data, scale_y) {
           axis.title.x=element_blank(), #space between axis and title!
           legend.text=element_text(size=10, family="Liberation Serif"),
           legend.title=element_text(size=12, family="Liberation Serif"),
-          plot.margin=unit(c(0.4,0.15,0.15,0.15), 'cm')) +
-    scale_y +
+          plot.margin=unit(c(0.4,0.15,0.15,0.15), 'cm'))
     scale_x_discrete('variable') 
   f1
 }
 ```
+
 ### Figure 4
 ```{r}
-draw_crossbars(p0s, scale_y_continuous('probability', breaks=seq(0, 1, 0.1)))
+draw_crossbars(p0s) + scale_y_continuous('probability', breaks=seq(0, 1, 0.1))
 ```
 
 ### Figure 5
 ```{r}
-draw_crossbars(slopes, scale_y_continuous())
+draw_crossbars(slopes)
 ```
+
 ### Figure 6
+
 ```{r}
-draw_crossbars(midpoints, scale_y_continuous())
+draw_crossbars(midpoints)
 ```
 
 ### Figure 1
@@ -264,4 +281,25 @@ f4_n_dotplot <- ggplot(table4_n, aes(year, prop)) +
   scale_y_continuous('proportion of dialectal realizations', breaks=seq(0,1,0.1), limits=c(0, 1)) +
   guides(size = guide_legend(title = 'number of\nobservations'))
 f4_n_dotplot
+```
+
+
+## Double check
+This is technical section to be removed. We double check that our results (estimates and confidence intervals for parameters of regression) are in aggrement with ones obtained before.
+
+
+```{r}
+p0_df <- as.data.frame(t(as.data.frame(p0s))) %>% mutate(variable=variables) %>% arrange(estimate)
+slopes_df <- as.data.frame(t(as.data.frame(slopes))) %>% mutate(variable=variables) %>% arrange(estimate)
+p0_df
+```
+
+```{r}
+p0_csv <- read.csv("/Users/user/Google Drive/ustja_2018/tables/results/logits_re_180718/p0.csv")
+(p0_csv %>% select(estimate=p0, lower=p0_lower, upper=p0_upper) %>% arrange(estimate) - p0_df %>% select(-c(variable))) %>% sapply(max)
+```
+
+```{r}
+b1_csv <- read.csv("/Users/user/Google Drive/ustja_2018/tables/results/logits_re_180718/b1.csv")
+(b1_csv %>% select(estimate=b1, lower=b1_lower, upper=b1_upper) %>% arrange(estimate) - slopes_df %>% select(-c(variable))) %>% sapply(max)
 ```

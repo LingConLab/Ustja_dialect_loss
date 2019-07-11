@@ -1,5 +1,5 @@
 ---
-title: "R Notebook"
+title: "Supplementary material for Dialect loss in the Russian North: modeling change across variables"
 output:
   pdf_document:
     dev: cairo_pdf
@@ -9,57 +9,70 @@ output:
 
 ```{r setup, include=FALSE, echo=FALSE}
 require("knitr")
-opts_knit$set(root.dir = "tables")
 require("tidyverse")
 require("lme4")
 require("ggrepel")
 ```
 
-## Initialization
+## Preparation
+### Initialization
+```{r init}
+save_figures <- FALSE
+# set this to TRUE if you want figures to be saved
 
-```{r}
-dir_results <- '../results'
+yearmin_band <- 1800
+# minimum year for turning point calculations
 
-bootstrap_iterations <- 1000
-do_bootstrap <- FALSE
-yearmin <- 1800
+yearmin <- 1920
+# minimum year for plotting
+
 yearmax <- 2000
+# maximum year to consider
 
-filenames <- c('var1_adj', 'var2_ae', 'var3_sh', 'var4_n', 
-               'var5_sja_ek', 'var6_sja_v', 
-               'var7_ot', 'var8_tu', 'var10_one', 'var11_ei', 'var12_kto')
 
-variables <- c('ADJ', 'A~E', 'SH', 'PREP', 'REFL1', 'REFL2', 'OT', 'TU', 'NOM', 'E~I', 'DISS')
-variables <- setNames(variables, filenames)
+save_figures_to <- "figures"
+# ignored if save_figures == FALSE
+
+filenames <- c('var1_adj', 'var2_a-e', 'var3_sh', 'var4_prep', 
+               'var5_refl1', 'var6_refl2', 
+               'var7_ot', 'var8_tu', 'var10_nom', 'var11_e-i', 'var12_diss')
+
+# this function convert filename to variable name
+fn_to_vn <- function(fn) {
+  str_replace(toupper(str_extract(fn, "(?<=_).+")), "-", "~")
+}
+
+variables <- fn_to_vn(filenames)
+
+save_fig_if_needed <- function(filename) {
+  if(save_figures) {
+    ggsave(paste(save_figures_to, filename, sep="/"), device = cairo_pdf)
+  }
+}
 ```
 
-We consider only speakers mentioned in `speakers_needed.csv`.
-
-WHY?
-
-```{r}
-speakers_table <- read.csv('speakers_needed.csv')
-speakers <- speakers_table$speaker
-```
-
-
-
-```{r}
+### Data reading
+```{r reading}
 read_table <- function(var) {
-  filename <- paste(var,'csv', sep='.')
+  filename <- paste("tables", paste(var,'csv', sep='.'), sep="/")
   table <- read.csv(filename)
-  table <- table[table$speaker %in% speakers, ]
   table <- table[table$total > 0, ]
-  table$prop <- table$cons/table$total
-  table$age <- 2017 - table$year
+  # keep only meaningful rows
+  
+  table$prop <- table$cons / table$total
+  # calculate proportions
+  
   table$year20 <- table$year - 1920
-  table
+  # new origin
+  
+  return(table)
 }
 ```
 Function `read_table` reads data that corresponds to a particular variable and make some pre-processing. For numerical stability, we use year 1920 as a new origin.
 
+### Preprocessing
 
-```{r}
+```{r preprocessing}
 unaggregate <- function(table) {
   cons <- as.vector(table$cons)
   inn <- as.vector(table$inn)
@@ -77,15 +90,16 @@ unaggregate <- function(table) {
   data <- data[rep(seq_len(nrow(data)), data$value), 1:4]
   # rep(seq_len(3), c(2, 4, 1)) --> 1 1 2 2 2 2 3
   # we duplicate each row of data the number of times given in $value
-  
-  data$age <- 2017 - data$year
+
   data$year20 <- data$year - 1920
-  data
+  return(data)
 }
 ```
 This function *unaggregates* data, i.e. in new table the row is one realization of a variable, either conservative or innovative.
 
-```{r}
+### Model specification
+
+```{r model}
 reg <- function(data, bobyqa) {
   if (bobyqa) {
     return(glmer(cons ~ year20 + (1|speaker), data = data, family='binomial',
@@ -98,21 +112,17 @@ reg <- function(data, bobyqa) {
   
 }
 ```
-This is our regression model.
+This is our regression model. For some cases we will use BOBYQA optimizer for numerical stability.
 
-```{r}
-bag <- function(table) {
-  indicies = sample(1:nrow(table), replace = T, size=nrow(table))
-  table[indicies,]
-}
-```
-This function performs baggin procedure used in boostrap estimate of confidence intervals.
+### Model evaluation
 
-```{r}
+```{r confband}
+# based on https://janhove.github.io/reporting/2017/05/12/visualising-models-2
+# by Jan Vanhove
 confband <- function(model) {
   vcov.m <- vcov(model)
   
-  confband <- data.frame(year=seq(yearmin, yearmax, length.out = 10000))
+  confband <- data.frame(year=seq(yearmin_band, yearmax, length.out = 10000))
   confband$year20 <- confband$year - 1920
   
   mm <- model.matrix(~ year20, confband)
@@ -131,16 +141,16 @@ confband <- function(model) {
 ```
 This function finds confidence band around prediction curve.
 
-```{r}
-midpoint_confint <- function(band) {
+```{r turning_gpoint}
+turning_point_confint <- function(band) {
   c(lower=band[min(which(band$lower_<0)), "year"],
-       upper=band[min(which(band$upper_<0)),"year"],
-       estimate=band[min(which(band$pred_<0)),"year"])
+       upper=band[min(which(band$upper_<0)), "year"],
+       estimate=band[min(which(band$pred_<0)), "year"])
 }
 ```
 This functions finds *turning point* (i.e. point of intersection of prediction curve with level probability=0.5) and its confidence interval.
 
-```{r}
+```{r confint}
 coeff_confint <- function(model, coeff) {
   coeff_data <- summary(model)$coeff[coeff,]
   est <- unname(coeff_data['Estimate'])
@@ -152,49 +162,20 @@ coeff_confint <- function(model, coeff) {
 ```
 This function extracts confidence interval from the model for given coefficient.
 
-## Main loop
-Now we are ready to fit all models and calculate corresponding estimates and confidence intervals
-
-```{r}
-midpoints <- list()
-p0s <- list()
-slopes <- list()
-
-for (fn in filenames) {
-  print(paste("Processing", fn))
-  table <- read_table(fn)
-  data <- unaggregate((table))
-  
-  fit_re <- reg(data, bobyqa=(fn == 'var11_ei'))
-  # we use BOBYQA optimizer for variable var11_ei in order
-  # to achieve convergence for confidence intervals
-  
-  summary(fit_re)
-  band <- confband(fit_re)
-  if(do_bootstrap) {
-    bootstrap_predicts <- vector("list", bootstrap_iterations)
-    
-    for (i in 1:bootstrap_iterations) {
-      bs_data <- unaggregate(bag(table))
-      bootstrap_predicts[[i]] <- confband(reg(bs_data), bs_data)$pred
-      print(i)
-    }
-    bs_confint <- t(sapply(transpose(bootstrap_predicts), 
-                           function(x){quantile(x, probs=c(0.05/2, 1-0.05/2), 
-                                                na.rm=TRUE,
-                                                type=8)}))
-    colnames(bs_confint) <- c("bs_lower", "bs_upper")
-    band <- cbind(band, bs_confint)
-  }
-
-  if (F) {
-    fig <- ggplot() +
-      geom_point(data=table, aes(x=year, y=prop, size=total), shape=21, fill='grey', color='black', alpha=0.6) +
+```{r draw_fit}
+  draw_fit_with_ribbon <- function(table, band) {
+    ggplot() +
+      geom_point(data=table, aes(x=year, y=prop, size=total), 
+                 shape=21, fill='grey', color='black', alpha=0.6) +
       geom_line(size=1, alpha=0.8, aes(year, pred), data=band) +
-      geom_ribbon(aes(ymin=lower, ymax=upper, x=year), alpha=0.3, data=band, 
-                  color='steelblue2', fill='steelblue2') +
+      geom_ribbon(aes(ymin=lower, ymax=upper, x=year), 
+                  alpha=0.3, 
+                  data=band, 
+                  color='steelblue2', 
+                  fill='steelblue2') +
       theme_bw() +
-      theme(plot.title = element_text(lineheight=1, size=12, family="serif",
+      theme(plot.title = element_text(lineheight=1, size=12, 
+                                      family="serif",
                                       margin=margin(0,0,10,0)), 
             axis.text=element_text(size=10, family="serif"), 
             axis.title=element_text(size=12, family="serif"),
@@ -203,33 +184,55 @@ for (fn in filenames) {
             legend.text=element_text(size=10, family="serif"),
             legend.title=element_text(size=12, family="serif"),
             plot.margin=unit(c(0.4,0.15,0.15,0.15), 'cm')) +
-      scale_x_continuous('year of birth', breaks=seq(yearmin, yearmax, 10)) +
-      scale_y_continuous('probability', breaks=seq(0,1,0.1), limits=c(0, 1)) +
-      scale_size_continuous(range=c(1,8)) +
+      scale_x_continuous('year of birth', 
+                         breaks=seq(yearmin, yearmax, 10), 
+                         limits = c(yearmin, yearmax)) +
+      scale_y_continuous('probability', 
+                         breaks=seq(0,1,0.1), 
+                         limits=c(0, 1)) +
+      scale_size_continuous(range=c(1, 8)) +
       guides(size = guide_legend(title = 'number of\nobservations'))
-      if(do_bootstrap) {
-        fig <- fig + geom_ribbon(aes(ymin=bs_lower, ymax=bs_upper, x=year), alpha=0.3, data=band, 
-                    color='orange1', fill='orange1')
-      }
   }
-  v <- variables[fn]
-  midpoints[[v]] <- midpoint_confint(band)
-  p0s[[v]] <- plogis(coeff_confint(fit_re, '(Intercept)'))
-  slopes[[v]] <- coeff_confint(fit_re, 'year20')
+```
+## Main loop
+Now we are ready to fit all models, plot figures and save confidence intervals.
+
+```{r main_loop, results="hide", message="hide"}
+turning_points <- list()
+b0s <- list()
+p0s <- list()
+b1s <- list()
+figs <- list()
+models <- list()
+
+for (fn in filenames) {
+  print(paste("Processing", fn))
+  table <- read_table(fn)
+  data <- unaggregate(table)
+
+  fit_re <- reg(data, bobyqa=(fn == 'var11_e-i'))
+  # we use BOBYQA optimizer for variable var11_e-i in order
+  # to achieve convergence for confidence intervals
   
-#  ggsave(paste(dir_results, paste(var, "png", sep="."), sep='/'), fig, height=4, width = 7)
+  # summary(fit_re)
+  band <- confband(fit_re)
+
+  v <- fn_to_vn(fn)
+  
+  models[[v]] <- fit_re
+  turning_points[[v]] <- turning_point_confint(band)
+  b0s[[v]] <- coeff_confint(fit_re, '(Intercept)')
+  p0s[[v]] <- plogis(b0s[[v]])
+  b1s[[v]] <- coeff_confint(fit_re, 'year20')
+  figs[[v]] <- draw_fit_with_ribbon(table, band)
+  save_fig_if_needed(paste(fn, "pdf", sep="."))
 }
 ```
 
 ## Plotting
 ### Figure 1
-```{r}
-#DOTPLOT
-
-table <- read_table("var4_n")
-
-library(ggrepel)
-#FIGURE 1
+```{r figure1}
+table <- read_table("var4_prep")
 
 pair1 <- c('gvp1949', 'ffp1952')
 pair2 <- c('ait1954', 'vkch1966')
@@ -241,94 +244,190 @@ pair2_table <- table[table$speaker %in% pair2, ]
 pair3_table <- table[table$speaker %in% pair3, ]
 
 fig_threepairs <- ggplot(table_compl, aes(year, prop)) +
-  geom_point(aes(x=year, y=prop, size=total), shape=21, fill='grey', color='black', alpha=0.6) +
+  geom_point(aes(x=year, y=prop, size=total), shape=21, 
+             fill='grey', 
+             color='black', alpha=0.6) +
   theme_bw() +
-  geom_point(data=pair1_table, na.rm=TRUE, aes(x=year, y=prop, size=total), fill="white", shape=21) +
-  geom_text_repel(data=pair1_table, aes(x=year, y=prop, label=speaker), segment.color = "black",
+  geom_point(data=pair1_table, na.rm=TRUE, aes(x=year, y=prop, 
+                                               size=total), 
+             fill="white", shape=21) +
+  geom_text_repel(data=pair1_table, aes(x=year, y=prop, label=speaker),
+                  segment.color = "black",
                   size=3, alpha=0.8, box.padding = unit(0.3, 'lines'),
                   point.padding = unit(0.4, 'lines')) +
-  geom_point(data=pair2_table, na.rm=TRUE, aes(x=year, y=prop, size=total), fill="white", shape=21) +
+  geom_point(data=pair2_table, na.rm=TRUE, 
+             aes(x=year, y=prop, size=total), 
+             fill="white", shape=21) +
   geom_text_repel(data=pair2_table, aes(x=year, y=prop, label=speaker), 
                   size=3, alpha=0.8, box.padding = unit(0.3, 'lines'),
                   point.padding = unit(0.4, 'lines')) +
-  geom_point(data=pair3_table, na.rm=TRUE, aes(x=year, y=prop, size=total), fill="white", shape=21) +
+  geom_point(data=pair3_table, na.rm=TRUE, 
+             aes(x=year, y=prop, size=total), fill="white", shape=21) +
   geom_text_repel(data=pair3_table, aes(x=year, y=prop, label=speaker), 
                   size=3, alpha=0.8, box.padding = unit(0.3, 'lines'),
                   point.padding = unit(0.4, 'lines')) +
-  theme(plot.title = element_text(lineheight=1, size=12, family="Liberation Serif",
+  theme(plot.title = element_text(lineheight=1, size=12, 
+                                  family="Liberation Serif",
                                   margin=margin(0,0,10,0)), 
-        axis.text=element_text(size=10, family="Liberation Serif"), #size of text
+        axis.text=element_text(size=10, family="Liberation Serif"), 
+        #size of text
         axis.title=element_text(size=12, family="Liberation Serif"),
-        axis.title.y=element_text(margin=margin(0,10,0,0)), #space between axis and title!
-        axis.title.x=element_text(margin=margin(10,0,0,0)), #space between axis and title!
+        axis.title.y=element_text(margin=margin(0,10,0,0)), 
+        #space between axis and title!
+        axis.title.x=element_text(margin=margin(10,0,0,0)), 
+        #space between axis and title!
         legend.text=element_text(size=10, family="Liberation Serif"),
         legend.title=element_text(size=12, family="Liberation Serif"),
         plot.margin=unit(c(0.4,0.15,0.15,0.15), 'cm')) +
   scale_x_continuous('year of birth', breaks=seq(1920, 2000, 10)) +
-  scale_y_continuous('proportion of dialectal realizations', breaks=seq(0,1,0.1), limits=c(0, 1)) +
+  scale_y_continuous('proportion of dialectal realizations', 
+                     breaks=seq(0,1,0.1), limits=c(0, 1)) +
   guides(size = guide_legend(title = 'number of\nobservations')) +
   scale_size_continuous(range=c(2,8))
 fig_threepairs
+save_fig_if_needed("figure1.pdf")
+```
+
+### Figure 2
+```{r figure2}
+figs$PREP
+```
+### Figure 3a
+```{r figure3a}
+figs$OT
+```
+
+### Figure 3b
+```{r figure3b}
+figs$ADJ
 ```
 
 ### Figures 4-6
-```{r}
-draw_crossbars <- function(data) {
-  p0 <- as.data.frame(t(as.data.frame(data))) %>% mutate(variable=variables) %>% arrange(estimate)
-  f1 <- ggplot(p0) +
+```{r figures4_6}
+draw_crossbars <- function(estimates) {
+  p0 <- (as.data.frame(t(as.data.frame(estimates)))  
+         %>% mutate(variable=variables) 
+         %>% arrange(estimate))
+  return(ggplot(p0) +
     geom_crossbar(aes(x=reorder(variable, estimate), 
                       y=estimate, ymin = lower, ymax = upper), 
                   size=0.4, width=0.4) +
     theme_bw() +
-    theme(plot.title = element_text(lineheight=1, size=12, family="Liberation Serif",
+    theme(plot.title = element_text(lineheight=1, 
+                                    size=12, 
+                                    family="Liberation Serif",
                                     margin=margin(0,0,10,0)), 
-          axis.text=element_text(size=10, family="Liberation Serif"), #size of text
+          axis.text=element_text(size=10, family="Liberation Serif"), 
+          #size of text
           axis.title=element_text(size=12, family="Liberation Serif"),
           axis.title.y=element_blank(), #space between axis and title!
           axis.title.x=element_blank(), #space between axis and title!
           legend.text=element_text(size=10, family="Liberation Serif"),
           legend.title=element_text(size=12, family="Liberation Serif"),
-          plot.margin=unit(c(0.4,0.15,0.15,0.15), 'cm'))
-    scale_x_discrete('variable') 
-  f1
+          plot.margin=unit(c(0.4,0.15,0.15,0.15), 'cm')) +
+    scale_x_discrete('variable'))
 }
 ```
 
 #### Figure 4
-```{r}
-draw_crossbars(p0s) + scale_y_continuous('probability', breaks=seq(0, 1, 0.1))
-ggsave("figure4.png")
+```{r figure4}
+draw_crossbars(p0s) + scale_y_continuous('probability', 
+                                         breaks=seq(0, 1, 0.1))
+save_fig_if_needed("figure4.pdf")
 ```
 
 #### Figure 5
-```{r}
-draw_crossbars(slopes)
-ggsave("figure5.png")
+```{r figure5}
+draw_crossbars(b1s)
+save_fig_if_needed("figure5.pdf")
 ```
 
 #### Figure 6
 
-```{r}
-draw_crossbars(midpoints)
-ggsave("figure6.png")
+```{r figure6}
+draw_crossbars(turning_points)
+save_fig_if_needed("figure6.pdf")
 ```
 
-## Double check
-This is technical section to be removed. We double check that our results (estimates and confidence intervals for parameters of regression) are in aggrement with ones obtained before.
-
-
-```{r}
-p0_df <- as.data.frame(t(as.data.frame(p0s))) %>% mutate(variable=variables) %>% arrange(estimate)
-slopes_df <- as.data.frame(t(as.data.frame(slopes))) %>% mutate(variable=variables) %>% arrange(estimate)
-p0_df
+## Appendix
+In this section, we generate table and figures in the Appendix.
+### Table 1
+```{r appendix_table1}
+as.data.frame(
+  sapply(variables, function(var) {
+  c(
+       b0_lower=unname(b0s[[var]]['lower']), 
+       b0=unname(b0s[[var]]['estimate']), 
+       b0_upper=unname(b0s[[var]]['upper']),
+       p0_lower=unname(p0s[[var]]['lower']),
+       p0=unname(p0s[[var]]['estimate']),
+       p0_upper=unname(p0s[[var]]['upper']),
+       b1_lower=unname(b1s[[var]]['lower']),
+       b1=unname(b1s[[var]]['estimate']),
+       b1_upper=unname(b1s[[var]]['upper']),
+       variance=summary(models[[var]])$varcor$speaker[1, 1],
+       stdev=sqrt(summary(models[[var]])$varcor$speaker[1, 1]),
+       turning_point_lower=unname(turning_points[[var]]['lower']),
+       turning_point=unname(turning_points[[var]]['estimate']),
+       turning_point_upper=unname(turning_points[[var]]['upper'])
+       )
+  })
+)
 ```
 
-```{r}
-p0_csv <- read.csv("/Users/user/Google Drive/ustja_2018/tables/results/logits_re_180718/p0.csv")
-(p0_csv %>% select(estimate=p0, lower=p0_lower, upper=p0_upper) %>% arrange(estimate) - p0_df %>% select(-c(variable))) %>% sapply(max)
+
+### Figure 1
+#### a)
+```{r, warning=FALSE}
+figs$ADJ
 ```
 
-```{r}
-b1_csv <- read.csv("/Users/user/Google Drive/ustja_2018/tables/results/logits_re_180718/b1.csv")
-(b1_csv %>% select(estimate=b1, lower=b1_lower, upper=b1_upper) %>% arrange(estimate) - slopes_df %>% select(-c(variable))) %>% sapply(max)
+#### b)
+```{r, warning=FALSE}
+figs$`A~E`
+```
+
+#### c)
+```{r, warning=FALSE}
+figs$SH
+```
+
+#### d)
+```{r, warning=FALSE}
+figs$PREP
+```
+
+#### e)
+```{r, warning=FALSE}
+figs$REFL1
+```
+
+#### f)
+```{r, warning=FALSE}
+figs$REFL2
+```
+
+#### g)
+```{r, warning=FALSE}
+figs$OT
+```
+
+#### h)
+```{r, warning=FALSE}
+figs$TU
+```
+
+#### i)
+```{r, warning=FALSE}
+figs$NOM
+```
+
+#### j)
+```{r, warning=FALSE}
+figs$`E~I`
+```
+
+#### k)
+```{r, warning=FALSE}
+figs$DISS
 ```

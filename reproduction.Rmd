@@ -1,15 +1,18 @@
 ---
 title: "R Notebook"
 output:
+  pdf_document:
+    dev: cairo_pdf
   html_document:
     df_print: paged
-  pdf_document: default
 ---
+
 ```{r setup, include=FALSE, echo=FALSE}
 require("knitr")
 opts_knit$set(root.dir = "tables")
 require("tidyverse")
 require("lme4")
+require("ggrepel")
 ```
 
 ## Initialization
@@ -38,6 +41,7 @@ WHY?
 speakers_table <- read.csv('speakers_needed.csv')
 speakers <- speakers_table$speaker
 ```
+
 
 
 ```{r}
@@ -218,56 +222,39 @@ for (fn in filenames) {
 ```
 
 ## Plotting
-
-```{r}
-draw_crossbars <- function(data) {
-  p0 <- as.data.frame(t(as.data.frame(data))) %>% mutate(variable=variables) %>% arrange(estimate)
-  f1 <- ggplot(p0) +
-    geom_crossbar(aes(x=reorder(variable, estimate), 
-                      y=estimate, ymin = lower, ymax = upper), 
-                  size=0.4, width=0.4) +
-    theme_bw() +
-    theme(plot.title = element_text(lineheight=1, size=12, family="Liberation Serif",
-                                    margin=margin(0,0,10,0)), 
-          axis.text=element_text(size=10, family="Liberation Serif"), #размер текста
-          axis.title=element_text(size=12, family="Liberation Serif"),
-          axis.title.y=element_blank(), #space between axis and title!
-          axis.title.x=element_blank(), #space between axis and title!
-          legend.text=element_text(size=10, family="Liberation Serif"),
-          legend.title=element_text(size=12, family="Liberation Serif"),
-          plot.margin=unit(c(0.4,0.15,0.15,0.15), 'cm'))
-    scale_x_discrete('variable') 
-  f1
-}
-```
-
-### Figure 4
-```{r}
-draw_crossbars(p0s) + scale_y_continuous('probability', breaks=seq(0, 1, 0.1))
-```
-
-### Figure 5
-```{r}
-draw_crossbars(slopes)
-```
-
-### Figure 6
-
-```{r}
-draw_crossbars(midpoints)
-```
-
 ### Figure 1
 ```{r}
-table4_n <- read_table("var4_n")
-f4_n_dotplot <- ggplot(table4_n, aes(year, prop)) +
-  geom_point(data= table4_n, aes(x=year, y=prop, size=total), 
-              shape=21, fill='grey', color='black', alpha=0.6) +
-  #geom_line(size=1, alpha=0.8) +
-  #geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.3) +
+#DOTPLOT
+
+table <- read_table("var4_n")
+
+library(ggrepel)
+#FIGURE 1
+
+pair1 <- c('gvp1949', 'ffp1952')
+pair2 <- c('ait1954', 'vkch1966')
+pair3 <- c('mgb1949', 'ofsh1952')
+speakers_to_point <- c(pair1, pair2, pair3)
+table_compl <- table[!(table$speaker %in% speakers_to_point), ]
+pair1_table <- table[table$speaker %in% pair1, ]
+pair2_table <- table[table$speaker %in% pair2, ]
+pair3_table <- table[table$speaker %in% pair3, ]
+
+fig_threepairs <- ggplot(table_compl, aes(year, prop)) +
+  geom_point(aes(x=year, y=prop, size=total), shape=21, fill='grey', color='black', alpha=0.6) +
   theme_bw() +
-  #ggtitle('The absence of initial n- in the third person pronouns after a preposition') +
-  #ggtitle('Values of probability predicted by a logistic regression model with one predictor (age)\n n in pronouns') +
+  geom_point(data=pair1_table, na.rm=TRUE, aes(x=year, y=prop, size=total), fill="white", shape=21) +
+  geom_text_repel(data=pair1_table, aes(x=year, y=prop, label=speaker), segment.color = "black",
+                  size=3, alpha=0.8, box.padding = unit(0.3, 'lines'),
+                  point.padding = unit(0.4, 'lines')) +
+  geom_point(data=pair2_table, na.rm=TRUE, aes(x=year, y=prop, size=total), fill="white", shape=21) +
+  geom_text_repel(data=pair2_table, aes(x=year, y=prop, label=speaker), 
+                  size=3, alpha=0.8, box.padding = unit(0.3, 'lines'),
+                  point.padding = unit(0.4, 'lines')) +
+  geom_point(data=pair3_table, na.rm=TRUE, aes(x=year, y=prop, size=total), fill="white", shape=21) +
+  geom_text_repel(data=pair3_table, aes(x=year, y=prop, label=speaker), 
+                  size=3, alpha=0.8, box.padding = unit(0.3, 'lines'),
+                  point.padding = unit(0.4, 'lines')) +
   theme(plot.title = element_text(lineheight=1, size=12, family="Liberation Serif",
                                   margin=margin(0,0,10,0)), 
         axis.text=element_text(size=10, family="Liberation Serif"), #размер текста
@@ -279,10 +266,52 @@ f4_n_dotplot <- ggplot(table4_n, aes(year, prop)) +
         plot.margin=unit(c(0.4,0.15,0.15,0.15), 'cm')) +
   scale_x_continuous('year of birth', breaks=seq(1920, 2000, 10)) +
   scale_y_continuous('proportion of dialectal realizations', breaks=seq(0,1,0.1), limits=c(0, 1)) +
-  guides(size = guide_legend(title = 'number of\nobservations'))
-f4_n_dotplot
+  guides(size = guide_legend(title = 'number of\nobservations')) +
+  scale_size_continuous(range=c(2,8))
+fig_threepairs
 ```
 
+### Figures 4-6
+```{r}
+draw_crossbars <- function(data) {
+  p0 <- as.data.frame(t(as.data.frame(data))) %>% mutate(variable=variables) %>% arrange(estimate)
+  f1 <- ggplot(p0) +
+    geom_crossbar(aes(x=reorder(variable, estimate), 
+                      y=estimate, ymin = lower, ymax = upper), 
+                  size=0.4, width=0.4) +
+    theme_bw() +
+    theme(plot.title = element_text(lineheight=1, size=12, family="Liberation Serif",
+                                    margin=margin(0,0,10,0)), 
+          axis.text=element_text(size=10, family="Liberation Serif"), #size of text
+          axis.title=element_text(size=12, family="Liberation Serif"),
+          axis.title.y=element_blank(), #space between axis and title!
+          axis.title.x=element_blank(), #space between axis and title!
+          legend.text=element_text(size=10, family="Liberation Serif"),
+          legend.title=element_text(size=12, family="Liberation Serif"),
+          plot.margin=unit(c(0.4,0.15,0.15,0.15), 'cm'))
+    scale_x_discrete('variable') 
+  f1
+}
+```
+
+#### Figure 4
+```{r}
+draw_crossbars(p0s) + scale_y_continuous('probability', breaks=seq(0, 1, 0.1))
+ggsave("figure4.png")
+```
+
+#### Figure 5
+```{r}
+draw_crossbars(slopes)
+ggsave("figure5.png")
+```
+
+#### Figure 6
+
+```{r}
+draw_crossbars(midpoints)
+ggsave("figure6.png")
+```
 
 ## Double check
 This is technical section to be removed. We double check that our results (estimates and confidence intervals for parameters of regression) are in aggrement with ones obtained before.

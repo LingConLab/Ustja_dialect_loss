@@ -6,6 +6,7 @@ output:
   html_document:
     df_print: paged
 ---
+This document contains code that reproduces figures and tables in the paper *Dialect loss in the Russian North: modeling change across variables*. See [README.md](https://github.com/LingConLab/Ustja_dialect_loss) for list of authors.
 
 ```{r setup, include=FALSE, echo=FALSE}
 require("knitr")
@@ -194,10 +195,11 @@ This function extracts confidence interval from the model for given coefficient.
       guides(size = guide_legend(title = 'number of\nobservations'))
   }
 ```
+
 ## Main loop
 Now we are ready to fit all models, plot figures and save confidence intervals.
 
-```{r main_loop, results="hide", message="hide"}
+```{r main_loop, results="hide", message=FALSE}
 turning_points <- list()
 b0s <- list()
 p0s <- list()
@@ -289,16 +291,16 @@ save_fig_if_needed("figure1.pdf")
 ```
 
 ### Figure 2
-```{r figure2}
+```{r figure2, warning=FALSE}
 figs$PREP
 ```
 ### Figure 3a
-```{r figure3a}
+```{r figure3a, warning=FALSE}
 figs$OT
 ```
 
 ### Figure 3b
-```{r figure3b}
+```{r figure3b, warning=FALSE}
 figs$ADJ
 ```
 
@@ -351,7 +353,9 @@ save_fig_if_needed("figure6.pdf")
 
 ## Appendix
 In this section, we generate table and figures in the Appendix.
+
 ### Table 1
+
 ```{r appendix_table1}
 as.data.frame(
   sapply(variables, function(var) {

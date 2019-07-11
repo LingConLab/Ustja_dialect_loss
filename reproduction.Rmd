@@ -257,7 +257,7 @@ fig_threepairs <- ggplot(table_compl, aes(year, prop)) +
                   point.padding = unit(0.4, 'lines')) +
   theme(plot.title = element_text(lineheight=1, size=12, family="Liberation Serif",
                                   margin=margin(0,0,10,0)), 
-        axis.text=element_text(size=10, family="Liberation Serif"), #размер текста
+        axis.text=element_text(size=10, family="Liberation Serif"), #size of text
         axis.title=element_text(size=12, family="Liberation Serif"),
         axis.title.y=element_text(margin=margin(0,10,0,0)), #space between axis and title!
         axis.title.x=element_text(margin=margin(10,0,0,0)), #space between axis and title!

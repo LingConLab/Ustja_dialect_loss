@@ -30,6 +30,9 @@ do_bootstrap <- FALSE
 bootstrap_iterations <- 1000
 # ignored if do_bootstrap == FALSE
 
+save_tables <- FALSE
+# set this to TRUE if you what tables to be saved
+
 yearmin_band <- 1800
 # minimum year for turning point calculations
 
@@ -42,6 +45,10 @@ yearmax <- 2000
 
 save_figures_to <- "figures"
 # ignored if save_figures == FALSE
+
+save_tables_to <- "tables_results"
+# ignored if save_tables == FALSE
+
 
 filenames <- c('var1_adj', 'var2_a-e', 'var3_sh', 'var4_prep', 
                'var5_refl1', 'var6_refl2', 
@@ -59,6 +66,14 @@ save_fig_if_needed <- function(filename) {
     ggsave(paste(save_figures_to, filename, sep="/"), device = cairo_pdf)
   }
 }
+
+save_table_if_needed <- function(table, filename) {
+  if(save_tables) {
+    dir.create(file.path(save_tables_to), showWarnings = FALSE)
+    write.csv(table, file.path(save_tables_to, filename), row.names = FALSE)
+  }
+}
+
 ```
 
 ### Data reading
@@ -342,6 +357,59 @@ fig_threepairs
 save_fig_if_needed("figure1.pdf")
 ```
 
+### Table 1
+```{r table1}
+create_fisher_table <- function(pair){
+  c1 <- c(pair$cons[1], pair$inn[1])
+  c2 <- c(pair$cons[2], pair$inn[2])
+  cont <- rbind(c1, c2)
+  p <- fisher.test(cont)$p.value
+  
+  if (p < 0.05){
+    significant <- 'significant'
+  }
+  else{
+    significant <- 'not significant'
+  }
+  
+  table <- pair[c('speaker', 'cons', 'inn', 'prop')]
+  table$prop <- round(100* table$prop, 1)
+  table$prop <- paste(table$prop, '%', sep='')
+  names(table)[2] <- 'dialect'
+  names(table)[3] <- 'standard'
+  names(table)[4] <- 'dial/total'
+  table[1, "Fisher's exact"] <- p
+  table[1, "significant?"] <- significant
+  
+  return(table)
+}
+```
+This function takes a pair of speakers and performs Fisher's exact test and outputs the result as a two-row dataframe.  
+
+#### First pair
+```{r pair1}
+fisher1 <- create_fisher_table(pair1_table)
+fisher1
+```
+
+#### Second pair
+```{r pair2}
+fisher2 <- create_fisher_table(pair2_table)
+fisher2
+```
+
+#### Third pair
+```{r pair3}
+fisher3 <- create_fisher_table(pair3_table)
+fisher3
+```
+
+Concatenating three dataframes
+```{r} 
+fisher <- rbind(fisher1, fisher2, fisher3)
+save_table_if_needed(fisher, 'table_1.csv')
+```
+
 ### Figure 2
 ```{r figure2, warning=FALSE}
 figs$PREP
@@ -409,7 +477,7 @@ In this section, we generate table and figures in the Appendix.
 ### Table 1
 
 ```{r appendix_table1}
-as.data.frame(
+appendix_table <- as.data.frame(
   sapply(variables, function(var) {
     coeff <- coeffs[[var]]
     turpoint <- turning_points[[var]]
@@ -434,6 +502,11 @@ as.data.frame(
      )
     })
 )
+appendix_table
+```
+
+```{r}
+save_table_if_needed(appendix_table, 'appendix_table_1.csv')
 ```
 
 

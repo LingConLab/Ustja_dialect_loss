@@ -23,8 +23,12 @@ save_figures <- FALSE
 
 do_bootstrap <- FALSE
 # set this to TRUE if you want to add bootstrapped confidence bands to figures
+# WARNING: this is extremely slow
+# Bootstrap will be used only for figures with confidence band,
+# everywehere else regular confidence intervals will be used anyways.
 
 bootstrap_iterations <- 1000
+# ignored if do_bootstrap == FALSE
 
 yearmin_band <- 1800
 # minimum year for turning point calculations
@@ -127,7 +131,7 @@ bag <- function(table) {
   table[indicies,]
 }
 ```
-This function will be used in bootstrap procedure.
+This function generates new sample by bagging (resampling with replacements). It will be used in bootstrap estimates for confidence intervals. Should be applied to initial (aggregated) data.
 
 ```{r confband}
 # based on https://janhove.github.io/reporting/2017/05/12/visualising-models-2
@@ -184,18 +188,21 @@ This function extracts confidence intervals for coefficients of the models: stan
 
 ```{r bootstrap_confint}
 bootstrap_confint <- function(table) {
-    bootstrap_predicts <- vector("list", bootstrap_iterations)
-    
-    for (i in 1:bootstrap_iterations) {
-      bs_data <- unaggregate(bag(table))
-      bootstrap_predicts[[i]] <- confband(reg(bs_data), bs_data)$pred
-    }
-    bs_confint <- t(sapply(transpose(bootstrap_predicts), 
-                           function(x){quantile(x, probs=c(0.05/2, 1-0.05/2), 
-                                                na.rm=TRUE,
-                                                type=8)}))
-    colnames(bs_confint) <- c("bs_lower", "bs_upper")
-    return(bs_confint)
+  print("Doing bootstrap; this can be slow.") 
+  bootstrap_predicts <- vector("list", bootstrap_iterations)
+  
+  for (i in 1:bootstrap_iterations) {
+    print(i)
+    bs_data <- unaggregate(bag(table))
+    bootstrap_predicts[[i]] <- confband(reg(bs_data, bobyqa=FALSE))$pred
+  }
+  bs_confint <- t(sapply(transpose(bootstrap_predicts), 
+                         function(x){quantile(unlist(x), 
+                                              probs=c(0.05/2, 1-0.05/2), 
+                                              na.rm=TRUE,
+                                              type=8)}))
+  colnames(bs_confint) <- c("bs_lower", "bs_upper")
+  return(bs_confint)
 }
 ```
 
@@ -424,7 +431,7 @@ as.data.frame(
        turning_point = unname(turpoint['estimate']),
        turning_point_upper = unname(turpoint['upper']),
        anova        = anovas[[var]]
-       )
+     )
     })
 )
 ```

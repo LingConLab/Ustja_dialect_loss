@@ -30,7 +30,7 @@ do_bootstrap <- FALSE
 bootstrap_iterations <- 1000
 # ignored if do_bootstrap == FALSE
 
-save_tables <- FALSE
+save_tables <- TRUE
 # set this to TRUE if you what tables to be saved
 
 yearmin_band <- 1800

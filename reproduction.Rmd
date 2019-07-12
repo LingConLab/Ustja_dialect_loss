@@ -21,6 +21,11 @@ require("ggrepel")
 save_figures <- FALSE
 # set this to TRUE if you want figures to be saved
 
+do_bootstrap <- FALSE
+# set this to TRUE if you want to add bootstrapped confidence bands to figures
+
+bootstrap_iterations <- 1000
+
 yearmin_band <- 1800
 # minimum year for turning point calculations
 
@@ -104,7 +109,7 @@ This function *unaggregates* data, i.e. in new table the row is one realization 
 reg <- function(data, bobyqa) {
   if (bobyqa) {
     return(glmer(cons ~ year20 + (1|speaker), data = data, family='binomial',
-        control = glmerControl(optimizer = "bobyqa")))
+        control = glmerControl(optimizer = "bobyqa", nAGQ=10)))
   }
   else
   {
@@ -116,6 +121,13 @@ reg <- function(data, bobyqa) {
 This is our regression model. For some cases we will use BOBYQA optimizer for numerical stability.
 
 ### Model evaluation
+```{r bag}
+bag <- function(table) {
+  indicies = sample(1:nrow(table), replace = T, size=nrow(table))
+  table[indicies,]
+}
+```
+This function will be used in bootstrap procedure.
 
 ```{r confband}
 # based on https://janhove.github.io/reporting/2017/05/12/visualising-models-2
@@ -152,20 +164,44 @@ turning_point_confint <- function(band) {
 This functions finds *turning point* (i.e. point of intersection of prediction curve with level probability=0.5) and its confidence interval.
 
 ```{r confint}
-coeff_confint <- function(model, coeff) {
-  coeff_data <- summary(model)$coeff[coeff,]
-  est <- unname(coeff_data['Estimate'])
-  conf <- confint.merMod(model, parm=coeff, devtol=1e-6)
-  return(c(estimate = est,
-           lower = conf[,'2.5 %'],
-           upper = conf[,'97.5 %']))
+coeff_confint <- function(model) {
+  est <- c(attributes(summary(model)$varcor$speaker)$stddev,
+           summary(model)$coeff[,'Estimate'])
+  # coefficient estimates
+  
+  conf <- confint.merMod(model, devtol=1e-6)
+  # confidence intervals
+  
+  m <- cbind(est, conf)
+  
+  colnames(m) <- c('estimate', 'lower', 'upper')
+  rownames(m) <- c('stddev', 'b0', 'b1')
+  m <- rbind(m, p0=plogis(m['b0',]))
+  return(m)
 }
 ```
-This function extracts confidence interval from the model for given coefficient.
+This function extracts confidence intervals for coefficients of the models: standard deviation of random effect (`stddev`), intercept (`b0`) and slope for `year20` (`b1`). It also calculates $p_0$'s (which are probabilities that corresponds to intercepts).
+
+```{r bootstrap_confint}
+bootstrap_confint <- function(table) {
+    bootstrap_predicts <- vector("list", bootstrap_iterations)
+    
+    for (i in 1:bootstrap_iterations) {
+      bs_data <- unaggregate(bag(table))
+      bootstrap_predicts[[i]] <- confband(reg(bs_data), bs_data)$pred
+    }
+    bs_confint <- t(sapply(transpose(bootstrap_predicts), 
+                           function(x){quantile(x, probs=c(0.05/2, 1-0.05/2), 
+                                                na.rm=TRUE,
+                                                type=8)}))
+    colnames(bs_confint) <- c("bs_lower", "bs_upper")
+    return(bs_confint)
+}
+```
 
 ```{r draw_fit}
   draw_fit_with_ribbon <- function(table, band) {
-    ggplot() +
+    fig <- ggplot() +
       geom_point(data=table, aes(x=year, y=prop, size=total), 
                  shape=21, fill='grey', color='black', alpha=0.6) +
       geom_line(size=1, alpha=0.8, aes(year, pred), data=band) +
@@ -193,6 +229,12 @@ This function extracts confidence interval from the model for given coefficient.
                          limits=c(0, 1)) +
       scale_size_continuous(range=c(1, 8)) +
       guides(size = guide_legend(title = 'number of\nobservations'))
+    if (do_bootstrap) {
+      fig <- fig + geom_ribbon(aes(ymin=bs_lower, ymax=bs_upper, x=year),
+                               alpha=0.3, data=band, 
+                               color='orange1', fill='orange1')
+    }
+    return(fig)
   }
 ```
 
@@ -201,11 +243,10 @@ Now we are ready to fit all models, plot figures and save confidence intervals.
 
 ```{r main_loop, results="hide", message=FALSE}
 turning_points <- list()
-b0s <- list()
-p0s <- list()
-b1s <- list()
+coeffs <- list()
 figs <- list()
 models <- list()
+anovas <- list()
 
 for (fn in filenames) {
   print(paste("Processing", fn))
@@ -218,14 +259,18 @@ for (fn in filenames) {
   
   # summary(fit_re)
   band <- confband(fit_re)
+  if (do_bootstrap) {
+    band <- cbind(band, bootstrap_confint(table))
+  }
 
   v <- fn_to_vn(fn)
   
   models[[v]] <- fit_re
+  anovas[[v]] <- anova(fit_re, glmer(cons ~ 1 + (1|speaker),
+                                     data=data,
+                                     family='binomial'))['fit_re','Pr(>Chisq)']
   turning_points[[v]] <- turning_point_confint(band)
-  b0s[[v]] <- coeff_confint(fit_re, '(Intercept)')
-  p0s[[v]] <- plogis(b0s[[v]])
-  b1s[[v]] <- coeff_confint(fit_re, 'year20')
+  coeffs[[v]] <- coeff_confint(fit_re)
   figs[[v]] <- draw_fit_with_ribbon(table, band)
   save_fig_if_needed(paste(fn, "pdf", sep="."))
 }
@@ -333,14 +378,14 @@ draw_crossbars <- function(estimates) {
 
 #### Figure 4
 ```{r figure4}
-draw_crossbars(p0s) + scale_y_continuous('probability', 
-                                         breaks=seq(0, 1, 0.1))
+draw_crossbars(lapply(coeffs, function(x) {x['p0',]})) +
+  scale_y_continuous('probability',  breaks=seq(0, 1, 0.1))
 save_fig_if_needed("figure4.pdf")
 ```
 
 #### Figure 5
 ```{r figure5}
-draw_crossbars(b1s)
+draw_crossbars(lapply(coeffs, function(x) {x['b1',]}))
 save_fig_if_needed("figure5.pdf")
 ```
 
@@ -359,23 +404,28 @@ In this section, we generate table and figures in the Appendix.
 ```{r appendix_table1}
 as.data.frame(
   sapply(variables, function(var) {
-  c(
-       b0_lower=unname(b0s[[var]]['lower']), 
-       b0=unname(b0s[[var]]['estimate']), 
-       b0_upper=unname(b0s[[var]]['upper']),
-       p0_lower=unname(p0s[[var]]['lower']),
-       p0=unname(p0s[[var]]['estimate']),
-       p0_upper=unname(p0s[[var]]['upper']),
-       b1_lower=unname(b1s[[var]]['lower']),
-       b1=unname(b1s[[var]]['estimate']),
-       b1_upper=unname(b1s[[var]]['upper']),
-       variance=summary(models[[var]])$varcor$speaker[1, 1],
-       stdev=sqrt(summary(models[[var]])$varcor$speaker[1, 1]),
-       turning_point_lower=unname(turning_points[[var]]['lower']),
-       turning_point=unname(turning_points[[var]]['estimate']),
-       turning_point_upper=unname(turning_points[[var]]['upper'])
+    coeff <- coeffs[[var]]
+    turpoint <- turning_points[[var]]
+    c(
+       b0_lower     = coeff['b0', 'lower'],
+       b0           = coeff['b0', 'estimate'],
+       b0_upper     = coeff['b0', 'upper'],
+       p0_lower     = coeff['p0', 'lower'],
+       p0           = coeff['p0', 'estimate'],
+       p0_upper     = coeff['p0', 'upper'],
+       b1_lower     = coeff['b1', 'lower'],
+       b1           = coeff['b1', 'estimate'],
+       b1_upper     = coeff['b1', 'upper'],
+       variance     = summary(models[[var]])$varcor$speaker[1, 1],
+       stddev_lower = coeff['stddev', 'lower'],
+       stddev       = coeff['stddev', 'estimate'],
+       stddev_upper = coeff['stddev', 'upper'],
+       turning_point_lower = unname(turpoint['lower']),
+       turning_point = unname(turpoint['estimate']),
+       turning_point_upper = unname(turpoint['upper']),
+       anova        = anovas[[var]]
        )
-  })
+    })
 )
 ```
 
